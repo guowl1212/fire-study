@@ -11,6 +11,9 @@
 
 [hidden]{display:none!important}
 
+/* Wrong-question collection and compact answer feedback. */
+#feedback{padding:13px 16px;margin-top:20px;background:#f3f6ee;color:#425a35;line-height:1.9;overflow-wrap:anywhere}#feedback strong{font-size:14px;font-weight:550}.answer-label{white-space:nowrap;font-size:13px}.review-actions{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:8px}.review-actions .text-button{padding:5px 0;font-size:12px}.storage-note{font-size:11px;color:#a36326;background:#fff5e8;border-radius:6px;padding:8px 12px;margin:14px 0}.empty-state{padding:32px 0 50px;text-align:center}.empty-state .type-badge{display:inline-block}.empty-state h2{font-size:22px;font-weight:550;margin:18px 0 8px}.empty-state p{font-size:13px;color:var(--muted);margin:0 0 24px}.question-card:has(.empty-state){padding-bottom:0}.wrong-tab{color:#a96a45}.wrong-tab span{color:#a96a45}@media(max-width:700px){.type-tabs{flex-wrap:wrap;gap:4px}.type-tabs .tab{flex:1 1 calc(25% - 4px)}.type-tabs .wrong-tab{flex:1 1 100%;border-top:1px solid #dfe3d6;border-radius:6px;padding:6px}.wrong-tab.active{border-top-color:transparent}.review-actions{margin-top:8px}.empty-state{padding:26px 0 34px}}
+
 </style>
 </head>
 <body>
@@ -31,6 +34,7 @@
           <button data-type="single" class="tab" aria-pressed="false">单选<span>201</span></button>
           <button data-type="multiple" class="tab" aria-pressed="false">多选<span>217</span></button>
           <button data-type="judge" class="tab" aria-pressed="false">判断<span>203</span></button>
+          <button data-type="wrong" class="tab wrong-tab" aria-pressed="false">错题集<span id="wrong-count">0</span></button>
         </div>
         <label class="order-select"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 6h16M4 12h11M4 18h6"/></svg><select id="order" aria-label="练习顺序"><option value="ordered">顺序练习</option><option value="random">随机练习</option></select></label>
       </div>
@@ -42,6 +46,8 @@
             <button id="reveal" class="text-button">直接看答案</button>
           </div>
           <div id="feedback" aria-live="polite" hidden></div>
+          <div id="review-actions" class="review-actions" hidden><button id="retry" class="text-button">重新作答</button><button id="remove-wrong" class="text-button" hidden>移出错题集</button></div>
+          <p id="storage-note" class="storage-note" role="status" hidden>当前浏览器无法保存错题，关闭页面后记录可能丢失。</p>
           <div class="card-footer"><button id="prev" class="nav-button"><span aria-hidden="true">←</span> 上一题</button><span id="position"></span><button id="next" class="nav-button">下一题 <span aria-hidden="true">→</span></button></div>
         </article>
         <aside class="side-card">
@@ -53,7 +59,7 @@
           <p id="range-hint" class="muted"></p>
           <div class="divider"></div>
           <div class="shortcuts"><span>选择选项</span><span><kbd>1</kbd> – <kbd>6</kbd></span><span>提交 / 下一题</span><kbd>Enter</kbd><span>切换题目</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
-          <details class="source-details"><summary>关于题库</summary><p>来源：【核】消防理论考试科目题库(1).xlsx。原表题干、选项和答案已保留；仅清理首尾空白。原题库未提供解析。</p><p>判分按原题库标准答案，多选题需全部选对。内容与答案未作法规有效性复核。</p><p>本页不保存作答记录，刷新后重新开始。</p></details>
+          <details class="source-details"><summary>关于题库与错题集</summary><p>来源：【核】消防理论考试科目题库(1).xlsx。原表题干、选项和答案已保留；仅清理首尾空白。原题库未提供解析。</p><p>判分按原题库标准答案，多选题需全部选对。内容与答案未作法规有效性复核。</p><p>答错自动加入错题集，答对后仍保留，掌握后可手动移出。错题只保存在当前设备、当前浏览器，清理浏览器数据后会丢失，不会同步到其他设备。</p></details>
         </aside>
       </div>
     </section>
@@ -68,86 +74,122 @@ window.QUESTION_BANK = {"version": "fire-theory-621-v1", "source": "【核】消
   'use strict';
   const bank = window.QUESTION_BANK.questions;
   const labels = {single:'单选题',multiple:'多选题',judge:'判断题'};
-  const tips = {single:'单选题每题只有一个正确答案，选择后点击「提交答案」。',multiple:'多选题有多个正确答案。全部选对才算正确，多选、漏选均为错误。',judge:'判断说法是否正确，选择「正确」或「错误」后提交。'};
+  const tips = {single:'单选题每题只有一个正确答案。答错会自动加入错题集。',multiple:'多选题需全部选对，多选、漏选均为错误，并自动加入错题集。',judge:'判断说法是否正确，选择后提交。答错会自动加入错题集。'};
   const $ = id => document.getElementById(id);
   const escape = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const storageKey = 'fire-theory-wrong-v1';
+  const validIds = new Set(bank.map(q=>q.id));
+  let storageAvailable = true;
+  function readWrong() {
+    try {
+      const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      return new Set(Array.isArray(data) ? data.filter(id=>typeof id==='string'&&validIds.has(id)) : []);
+    } catch { storageAvailable=false; return new Set(); }
+  }
+  let wrong = readWrong();
   let type = 'all', order = 'ordered', queue = [...bank], index = 0;
-  // Only this open page holds selections. No login, server writes or persistent tracking.
+  // Only wrong-question IDs persist; selections stay in this open page.
   const responses = new Map();
   const current = () => queue[index];
-  const response = () => responses.get(current().id) || {selected:[],status:null};
-  const exact = (a,b) => a.length === b.length && [...a].sort().join('') === [...b].sort().join('');
+  const response = () => responses.get(current()?.id) || {selected:[],status:null};
+  const exact = (a,b) => a.length===b.length && [...a].sort().join('')===[...b].sort().join('');
+  function saveWrong() {
+    try { localStorage.setItem(storageKey,JSON.stringify([...wrong])); storageAvailable=true; }
+    catch { storageAvailable=false; }
+  }
   function shuffle(items) {
-    for (let i=items.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1)); [items[i],items[j]]=[items[j],items[i]]; }
+    for(let i=items.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[items[i],items[j]]=[items[j],items[i]];}
     return items;
   }
-  function rebuild() {
-    queue=bank.filter(q=>type==='all'||q.type===type);
-    if(order==='random') shuffle(queue);
-    index=0;
-    render();
+  function rebuild(freshWrong=false) {
+    queue=bank.filter(q=>type==='wrong'?wrong.has(q.id):type==='all'||q.type===type);
+    if(freshWrong&&type==='wrong')queue.forEach(q=>responses.delete(q.id));
+    if(order==='random')shuffle(queue);
+    index=0;render();
   }
   function render() {
-    const q=current(), r=response(), locked=!!r.status;
-    $('question').innerHTML=`<div class="question-meta"><div class="question-label"><span class="type-badge">${labels[q.type]}</span><span class="question-number">原题 ${String(q.number).padStart(3,'0')}</span></div><span>选择${q.type==='multiple'?'所有':'一个'}正确答案</span></div><h2 class="question-text">${escape(q.text)}</h2><div class="options ${q.type}" role="group" aria-label="答案选项">${Object.entries(q.options).map(([key,value])=>{
-      const selected=r.selected.includes(key), correct=locked&&q.answer.includes(key), wrong=locked&&selected&&!q.answer.includes(key);
-      return `<button class="option${selected?' selected':''}${correct?' correct':''}${wrong?' wrong':''}" data-key="${key}" aria-pressed="${selected}" ${locked?'disabled':''}><span class="option-letter">${key}</span><span class="option-text">${escape(value)}</span>${correct?'<span class="option-mark" aria-label="标准答案">✓</span>':wrong?'<span class="option-mark" aria-label="错误选项">×</span>':''}</button>`;
-    }).join('')}</div><p class="selection-hint">${q.type==='multiple'?'可选择多项，选好后统一提交。':'选择后提交，即可核对答案。'}</p>`;
-    $('check').hidden=locked;
-    $('reveal').hidden=locked;
-    $('check').disabled=r.selected.length===0;
-    document.querySelector('.question-actions').hidden=locked;
-    $('feedback').hidden=!locked;
-    if(locked) {
-      const correct=r.status==='correct', revealed=r.status==='revealed';
-      $('feedback').className=revealed?'revealed':correct?'':'incorrect';
-      const selectedText=r.selected.length?r.selected.join('、'):'未选择';
-      $('feedback').innerHTML=`<div class="feedback-title">${revealed?'已显示标准答案':correct?'✓ 回答正确':'本题回答有误'}</div><div class="answer-line">标准答案：<strong>${q.answer.join('、')}</strong>${!revealed?'　你的选择：'+selectedText:''}</div><div class="answer-detail">${q.answer.map(a=>escape(a+'．'+q.options[a])).join('<br>')}</div><div class="feedback-note">${q.type==='multiple'?'多选题按全部选对计分。 ':''}原题库未提供解析。</div><button id="retry" class="text-button">重新作答</button>`;
-    }
-    $('position').textContent=`${index+1} / ${queue.length}`;
-    $('prev').disabled=index===0;
-    $('next').disabled=index===queue.length-1;
-    $('jump').max=queue.length;
-    $('jump').value=index+1;
-    $('range-hint').textContent=`当前范围 1–${queue.length} 题`;
-    $('type-tip').textContent=tips[q.type];
-    document.querySelectorAll('[data-type]').forEach(b=>{ const active=b.dataset.type===type; b.classList.toggle('active',active); b.setAttribute('aria-pressed',active); });
+    const q=current(),r=response(),locked=!!r.status;
+    $('wrong-count').textContent=wrong.size;
+    $('storage-note').hidden=storageAvailable;
+    document.querySelectorAll('[data-type]').forEach(b=>{const active=b.dataset.type===type;b.classList.toggle('active',active);b.setAttribute('aria-pressed',active);});
     $('order').value=order;
+    $('order').disabled=!q;
+    $('jump').disabled=!q;
+    document.querySelector('#jump-form button').disabled=!q;
+    document.querySelector('.card-footer').hidden=!q;
+    $('jump').max=Math.max(1,queue.length);
+    $('jump').value=q?index+1:1;
+    $('range-hint').textContent=q?`当前范围 1–${queue.length} 题`:'错题会自动收录在这里';
+    $('position').textContent=q?`${index+1} / ${queue.length}`:'0 / 0';
+    $('prev').disabled=!q||index===0;
+    $('next').disabled=!q||index===queue.length-1;
+    $('check').hidden=!q||locked;
+    $('reveal').hidden=!q||locked;
+    $('check').disabled=!r.selected.length;
+    document.querySelector('.question-actions').hidden=!q||locked;
+    $('feedback').hidden=!q||!locked;
+    $('review-actions').hidden=!q||(!locked&&!wrong.has(q.id));
+    $('retry').hidden=!q||!locked;
+    $('remove-wrong').hidden=!q||!wrong.has(q.id);
+    if(!q){
+      $('question').innerHTML='<div class="empty-state"><div class="type-badge">错题集</div><h2>还没有错题</h2><p>答错的题目会自动加入这里，方便集中重练。</p><button class="primary" data-action="back-to-bank">开始刷题</button></div>';
+      $('feedback').innerHTML='';
+      $('type-tip').textContent='答错自动收录。进入错题集即可重新作答，掌握后点击「移出错题集」。';
+      return;
+    }
+    $('type-tip').textContent=type==='wrong'?'错题已为你重新出题。答对后仍保留，掌握后可点击「移出错题集」。':tips[q.type];
+    $('question').innerHTML=`<div class="question-meta"><div class="question-label"><span class="type-badge">${labels[q.type]}</span><span class="question-number">原题 ${String(q.number).padStart(3,'0')}</span></div><span>选择${q.type==='multiple'?'所有':'一个'}正确答案</span></div><h2 class="question-text">${escape(q.text)}</h2><div class="options ${q.type}" role="group" aria-label="答案选项">${Object.entries(q.options).map(([key,value])=>{
+      const selected=r.selected.includes(key),correct=locked&&q.answer.includes(key),incorrect=locked&&selected&&!q.answer.includes(key);
+      return `<button class="option${selected?' selected':''}${correct?' correct':''}${incorrect?' wrong':''}" data-key="${key}" aria-pressed="${selected}" ${locked?'disabled':''}><span class="option-letter">${key}</span><span class="option-text">${escape(value)}</span>${correct?'<span class="option-mark" aria-label="标准答案">✓</span>':incorrect?'<span class="option-mark" aria-label="错误选项">×</span>':''}</button>`;
+    }).join('')}</div>${locked?'':`<p class="selection-hint">${q.type==='multiple'?'可选择多项，选好后统一提交。':'选择后提交，即可核对答案。'}</p>`}`;
+    if(locked){
+      $('feedback').className='';
+      $('feedback').innerHTML=`<span class="answer-label">正确答案：</span><strong>${q.answer.map(a=>escape(a+'．'+q.options[a])).join('；')}</strong>`;
+    }
   }
-  function choose(key) {
-    const q=current(), r=response();
-    if(r.status||!(key in q.options)) return;
+  function choose(key){
+    const q=current(),r=response();
+    if(!q||r.status||!(key in q.options))return;
     const selected=q.type==='multiple'?(r.selected.includes(key)?r.selected.filter(x=>x!==key):[...r.selected,key].sort()):[key];
-    responses.set(q.id,{selected,status:null});
-    render();
+    responses.set(q.id,{selected,status:null});render();
     document.querySelector(`[data-key="${key}"]`)?.focus({preventScroll:true});
   }
-  function check(reveal=false) {
+  function check(reveal=false){
     const q=current(),r=response();
-    if(r.status||(!reveal&&!r.selected.length))return;
-    responses.set(q.id,{selected:r.selected,status:reveal?'revealed':exact(r.selected,q.answer)?'correct':'incorrect'});
+    if(!q||r.status||(!reveal&&!r.selected.length))return;
+    const status=reveal?'revealed':exact(r.selected,q.answer)?'correct':'incorrect';
+    responses.set(q.id,{selected:r.selected,status});
+    if(status==='incorrect'){wrong.add(q.id);saveWrong();}
     render();
-    $('next').focus({preventScroll:true});
+    (index<queue.length-1?$('next'):$('retry')).focus({preventScroll:true});
   }
-  function move(delta) {
+  function move(delta){
     const next=index+delta;
     if(next<0||next>=queue.length)return;
     index=next;render();
-    // Keep a long question's answer area from hiding the following question on phones.
     if(document.querySelector('.question-card').getBoundingClientRect().top<0)document.querySelector('.toolbar').scrollIntoView({behavior:'instant',block:'start'});
   }
-  $('question').addEventListener('click',e=>{const b=e.target.closest('[data-key]');if(b)choose(b.dataset.key);});
+  $('question').addEventListener('click',e=>{
+    const b=e.target.closest('[data-key]');if(b)choose(b.dataset.key);
+    if(e.target.closest('[data-action="back-to-bank"]')){type='all';rebuild();}
+  });
   $('check').addEventListener('click',()=>check());
   $('reveal').addEventListener('click',()=>check(true));
-  $('feedback').addEventListener('click',e=>{if(e.target.closest('#retry')){responses.delete(current().id);render();}});
+  $('retry').addEventListener('click',()=>{if(current()){responses.delete(current().id);render();}});
+  $('remove-wrong').addEventListener('click',()=>{
+    const q=current();if(!q)return;
+    wrong.delete(q.id);saveWrong();
+    if(type==='wrong'){queue=queue.filter(item=>item.id!==q.id);index=Math.max(0,Math.min(index,queue.length-1));}
+    render();
+  });
   $('prev').addEventListener('click',()=>move(-1));
   $('next').addEventListener('click',()=>move(1));
   $('order').addEventListener('change',e=>{order=e.target.value;rebuild();});
-  document.querySelectorAll('[data-type]').forEach(b=>b.addEventListener('click',()=>{type=b.dataset.type;rebuild();}));
+  document.querySelectorAll('[data-type]').forEach(b=>b.addEventListener('click',()=>{type=b.dataset.type;rebuild(true);}));
   $('jump-form').addEventListener('submit',e=>{e.preventDefault();const n=Number($('jump').value);if(Number.isInteger(n)&&n>=1&&n<=queue.length){index=n-1;render();$('jump').blur();}});
   document.addEventListener('keydown',e=>{
     if(e.ctrlKey||e.metaKey||e.altKey||e.shiftKey||e.repeat)return;
-    if(['INPUT','SELECT','TEXTAREA'].includes(document.activeElement?.tagName))return;
+    if(['INPUT','SELECT','TEXTAREA'].includes(document.activeElement?.tagName)||!current())return;
     if(/^[1-6]$/.test(e.key)){e.preventDefault();choose(String.fromCharCode(64+Number(e.key)));}
     if(e.key==='ArrowLeft'){e.preventDefault();move(-1);}
     if(e.key==='ArrowRight'){e.preventDefault();move(1);}
@@ -155,9 +197,7 @@ window.QUESTION_BANK = {"version": "fire-theory-621-v1", "source": "【核】消
       const focused=document.activeElement;
       if(focused?.closest('button')&&!focused.matches('[data-key],#check,#next'))return;
       if(focused?.matches('summary'))return;
-      // Native button Enter must not also fire a second action after the DOM changes.
-      e.preventDefault();
-      if(response().status)move(1);else check();
+      e.preventDefault();if(response().status)move(1);else check();
     }
   });
   render();
